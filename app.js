@@ -392,6 +392,7 @@ const stats = { mode: 'week', anchor: null, metric: 'sets', pick: null };
 const METRICS = {
   sets: { label: 'セット数', unit: v => `${v}セット` },
   vol: { label: '総重量', unit: v => `${v.toLocaleString()}kg` },
+  reps: { label: '回数', unit: v => `${v.toLocaleString()}回` },
   days: { label: '日数', unit: v => `${v}日` },
 };
 const startOfWeek = s => addDays(s, -parseYmd(s).getDay()); // 日曜始まり
@@ -411,6 +412,10 @@ const periodLabel = (mode, p) => {
 };
 const shortLabel = (mode, p) => (mode === 'week' ? fmtShort(p.start) : `${parseYmd(p.start).getMonth() + 1}月`);
 const fmtNum = n => String(Math.round(n * 10) / 10);
+// 回数の合計：重さ×回数・回数のみの種目が対象（時間・有酸素は回数がないので含めない）
+const secOf = e => (e.kind === 'time' ? (e.sets || []).reduce((a, s) => a + (Number(s.s) || 0), 0) : 0);
+const fmtSec = v => { v = Math.round(v); const m = Math.floor(v / 60), s = v % 60; return m ? `${m}分${s ? `${s}秒` : ''}` : `${s}秒`; };
+const repsOf = e => (e.kind === 'weight' || e.kind === 'reps' ? (e.sets || []).reduce((a, s) => a + (Number(s.r) || 0), 0) : 0);
 
 // その記録の「最高値」：重さ×回数は最高重量、回数のみは最多回数、秒は最長時間（有酸素は対象外）
 function bestOf(e) {
@@ -424,17 +429,21 @@ const bestText = (kind, v) => ({ weight: `${fmtNum(v)}kg`, reps: `${fmtNum(v)}�
 const exKey = e => `${e.exerciseId || e.name}|${e.kind}`;
 
 function summarize(list) {
-  const out = { days: new Set(list.map(e => e.date)).size, sets: 0, vol: 0, parts: {}, ex: new Map(), cardio: { n: 0, min: 0, km: 0 } };
+  const out = { days: new Set(list.map(e => e.date)).size, sets: 0, vol: 0, reps: 0, parts: {}, ex: new Map(), cardio: { n: 0, min: 0, km: 0 } };
   for (const e of list) {
     const filled = (e.sets || []).filter(isFilled);
     out.sets += filled.length;
     out.vol += volume(e);
+    const reps = repsOf(e);
+    out.reps += reps;
     out.parts[e.part] = (out.parts[e.part] || 0) + filled.length;
     const k = exKey(e);
     let x = out.ex.get(k);
-    if (!x) { x = { key: k, name: e.name, part: e.part, kind: e.kind, dates: new Set(), sets: 0, best: null, min: 0, km: 0 }; out.ex.set(k, x); }
+    if (!x) { x = { key: k, name: e.name, part: e.part, kind: e.kind, dates: new Set(), sets: 0, reps: 0, sec: 0, best: null, min: 0, km: 0 }; out.ex.set(k, x); }
     x.dates.add(e.date);
     x.sets += filled.length;
+    x.reps += reps;
+    x.sec += secOf(e);
     const b = bestOf(e);
     if (b != null && (x.best == null || b > x.best)) x.best = b;
     if (e.part === 'cardio') out.cardio.n++;
@@ -481,7 +490,7 @@ async function renderStats() {
   const trend = Array.from({ length: n }, (_, i) => {
     const p = periodOf(mode, shiftPeriod(mode, stats.anchor, i - (n - 1)));
     const s = summarize(inRange(p));
-    return { p, v: { sets: s.sets, vol: s.vol, days: s.days } };
+    return { p, v: { sets: s.sets, vol: s.vol, reps: s.reps, days: s.days } };
   });
   const isNextFuture = shiftPeriod(mode, stats.anchor, 1) > t;
 
@@ -495,10 +504,11 @@ async function renderStats() {
       <strong>${periodLabel(mode, cur)}</strong>
       <button class="icon-btn" id="nextP" aria-label="次の期間" ${isNextFuture ? 'disabled' : ''}>›</button>
     </div>
-    <div class="stats">
+    <div class="stats four">
       <div><b>${S.days}<small>日</small></b><span>実施日数</span><em>${prevName} ${sign(S.days - P.days)}日</em></div>
       <div><b>${S.sets}</b><span>合計セット</span><em>${prevName} ${sign(S.sets - P.sets)}</em></div>
       <div><b>${S.vol.toLocaleString()}<small>kg</small></b><span>総重量</span><em>${prevName} ${volDiff}</em></div>
+      <div><b>${S.reps.toLocaleString()}<small>回</small></b><span>合計回数</span><em>${prevName} ${sign(S.reps - P.reps)}回</em></div>
     </div>
 
     <section class="box sum-box">
@@ -520,7 +530,7 @@ async function renderStats() {
           : x.best != null ? `最高 ${bestText(x.kind, x.best)}` : '';
         return `<li><i class="dot" style="background:${partOf(x.part).color}"></i>
           <span class="nm">${esc(x.name)}${pb ? '<span class="pb" title="自己ベスト更新">★自己ベスト</span>' : ''}</span>
-          <span class="nums">${x.dates.size}回・${x.sets}セット${detail ? `<br><small>${detail}</small>` : ''}</span></li>`;
+          <span class="nums">${x.dates.size}日・${x.sets}セット${x.reps ? `・${x.reps.toLocaleString()}回` : x.sec ? `・合計${fmtSec(x.sec)}` : ''}${detail ? `<br><small>${detail}</small>` : ''}</span></li>`;
       }).join('')}</ul>` : '<p class="muted">この期間の記録はありません</p>'}
     </section>
 

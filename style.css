@@ -234,6 +234,7 @@ main {
 .icon-btn:disabled { opacity: .3; cursor: default; }
 .stats b small { font-size: 13px; margin-left: 1px; color: var(--muted); font-weight: 600; }
 .stats em { font-style: normal; font-size: 11px; color: var(--muted); }
+.stats.four { grid-template-columns: repeat(2, 1fr); }
 .sum-box { margin-top: 12px; }
 .sum-box h3 { margin-bottom: 10px; }
 .part-bars { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
