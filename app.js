@@ -387,6 +387,199 @@ async function openPicker(date, onPick) {
   });
 }
 
+/* ---------- 集計 ---------- */
+const stats = { mode: 'week', anchor: null, metric: 'sets', pick: null };
+const METRICS = {
+  sets: { label: 'セット数', unit: v => `${v}セット` },
+  vol: { label: '総重量', unit: v => `${v.toLocaleString()}kg` },
+  days: { label: '日数', unit: v => `${v}日` },
+};
+const startOfWeek = s => addDays(s, -parseYmd(s).getDay()); // 日曜始まり
+function periodOf(mode, anchor) {
+  if (mode === 'week') { const start = startOfWeek(anchor); return { start, end: addDays(start, 6) }; }
+  const d = parseYmd(anchor);
+  return { start: ymd(new Date(d.getFullYear(), d.getMonth(), 1)), end: ymd(new Date(d.getFullYear(), d.getMonth() + 1, 0)) };
+}
+function shiftPeriod(mode, anchor, n) {
+  if (mode === 'week') return addDays(startOfWeek(anchor), 7 * n);
+  const d = parseYmd(anchor);
+  return ymd(new Date(d.getFullYear(), d.getMonth() + n, 1));
+}
+const periodLabel = (mode, p) => {
+  const d = parseYmd(p.start);
+  return mode === 'week' ? `${fmtShort(p.start)}〜${fmtShort(p.end)}` : `${d.getFullYear()}年${d.getMonth() + 1}月`;
+};
+const shortLabel = (mode, p) => (mode === 'week' ? fmtShort(p.start) : `${parseYmd(p.start).getMonth() + 1}月`);
+const fmtNum = n => String(Math.round(n * 10) / 10);
+
+// その記録の「最高値」：重さ×回数は最高重量、回数のみは最多回数、秒は最長時間（有酸素は対象外）
+function bestOf(e) {
+  const key = { weight: 'w', reps: 'r', time: 's' }[e.kind];
+  if (!key) return null;
+  const vals = (e.sets || []).map(s => s[key]).filter(v => v !== '' && v != null).map(Number).filter(Number.isFinite);
+  return vals.length ? Math.max(...vals) : null;
+}
+const bestText = (kind, v) => ({ weight: `${fmtNum(v)}kg`, reps: `${fmtNum(v)}回`, time: `${fmtNum(v)}秒` }[kind] || '');
+// 形式を変えた種目は別物として集計する（最高値の意味が違うため）
+const exKey = e => `${e.exerciseId || e.name}|${e.kind}`;
+
+function summarize(list) {
+  const out = { days: new Set(list.map(e => e.date)).size, sets: 0, vol: 0, parts: {}, ex: new Map(), cardio: { n: 0, min: 0, km: 0 } };
+  for (const e of list) {
+    const filled = (e.sets || []).filter(isFilled);
+    out.sets += filled.length;
+    out.vol += volume(e);
+    out.parts[e.part] = (out.parts[e.part] || 0) + filled.length;
+    const k = exKey(e);
+    let x = out.ex.get(k);
+    if (!x) { x = { key: k, name: e.name, part: e.part, kind: e.kind, dates: new Set(), sets: 0, best: null, min: 0, km: 0 }; out.ex.set(k, x); }
+    x.dates.add(e.date);
+    x.sets += filled.length;
+    const b = bestOf(e);
+    if (b != null && (x.best == null || b > x.best)) x.best = b;
+    if (e.part === 'cardio') out.cardio.n++;
+    if (e.kind === 'cardio') {
+      for (const s of filled) {
+        const m = Number(s.min) || 0, km = Number(s.km) || 0;
+        x.min += m; x.km += km; out.cardio.min += m; out.cardio.km += km;
+      }
+    }
+  }
+  return out;
+}
+
+async function renderStats() {
+  setTab('stats');
+  setHeader('集計');
+  const t = today();
+  if (!stats.anchor) stats.anchor = t;
+  const all = await DB.all('entries');
+  const inRange = p => all.filter(e => e.date >= p.start && e.date <= p.end);
+  const { mode } = stats;
+  const cur = periodOf(mode, stats.anchor);
+  const prev = periodOf(mode, shiftPeriod(mode, stats.anchor, -1));
+  const S = summarize(inRange(cur));
+  const P = summarize(inRange(prev));
+  const prevName = mode === 'week' ? '前の週' : '前の月';
+  const sign = n => (n > 0 ? `+${n.toLocaleString()}` : n < 0 ? `${n.toLocaleString()}` : '±0');
+  const volDiff = P.vol > 0 ? `${sign(Math.round((S.vol - P.vol) / P.vol * 100))}%` : '—';
+
+  // 自己ベスト：この期間の最高値が、期間より前の最高値を上回ったら★
+  const priorBest = new Map();
+  for (const e of all) {
+    if (e.date >= cur.start) continue;
+    const b = bestOf(e);
+    if (b == null) continue;
+    const k = exKey(e);
+    if (!priorBest.has(k) || b > priorBest.get(k)) priorBest.set(k, b);
+  }
+  const exList = [...S.ex.values()].sort((a, b) => b.sets - a.sets || b.dates.size - a.dates.size);
+  const maxPart = Math.max(1, ...PARTS.map(p => S.parts[p.id] || 0));
+
+  // 推移：週は直近8週、月は直近6か月（表示中の期間が右端）
+  const n = mode === 'week' ? 8 : 6;
+  const trend = Array.from({ length: n }, (_, i) => {
+    const p = periodOf(mode, shiftPeriod(mode, stats.anchor, i - (n - 1)));
+    const s = summarize(inRange(p));
+    return { p, v: { sets: s.sets, vol: s.vol, days: s.days } };
+  });
+  const isNextFuture = shiftPeriod(mode, stats.anchor, 1) > t;
+
+  view.innerHTML = `
+    <div class="seg" id="modeSeg" role="group" aria-label="集計の期間">
+      <button type="button" data-mode="week" class="${mode === 'week' ? 'on' : ''}">週</button>
+      <button type="button" data-mode="month" class="${mode === 'month' ? 'on' : ''}">月</button>
+    </div>
+    <div class="period-nav">
+      <button class="icon-btn" id="prevP" aria-label="前の期間">‹</button>
+      <strong>${periodLabel(mode, cur)}</strong>
+      <button class="icon-btn" id="nextP" aria-label="次の期間" ${isNextFuture ? 'disabled' : ''}>›</button>
+    </div>
+    <div class="stats">
+      <div><b>${S.days}<small>日</small></b><span>実施日数</span><em>${prevName} ${sign(S.days - P.days)}日</em></div>
+      <div><b>${S.sets}</b><span>合計セット</span><em>${prevName} ${sign(S.sets - P.sets)}</em></div>
+      <div><b>${S.vol.toLocaleString()}<small>kg</small></b><span>総重量</span><em>${prevName} ${volDiff}</em></div>
+    </div>
+
+    <section class="box sum-box">
+      <h3>部位ごと（セット数）</h3>
+      <ul class="part-bars">${PARTS.map(p => {
+        const v = S.parts[p.id] || 0;
+        return `<li><span class="pl">${p.name}</span>
+          <span class="track"><i style="width:${v ? Math.max(3, v / maxPart * 100) : 0}%;background:${p.color}"></i></span>
+          <span class="pv">${v}</span></li>`;
+      }).join('')}</ul>
+    </section>
+
+    <section class="box sum-box">
+      <h3>種目ごと</h3>
+      ${exList.length ? `<ul class="ex-sum">${exList.map(x => {
+        const pb = x.best != null && priorBest.has(x.key) && x.best > priorBest.get(x.key);
+        const detail = x.kind === 'cardio'
+          ? [x.min ? `${fmtNum(x.min)}分` : '', x.km ? `${fmtNum(x.km)}km` : ''].filter(Boolean).join(' ')
+          : x.best != null ? `最高 ${bestText(x.kind, x.best)}` : '';
+        return `<li><i class="dot" style="background:${partOf(x.part).color}"></i>
+          <span class="nm">${esc(x.name)}${pb ? '<span class="pb" title="自己ベスト更新">★自己ベスト</span>' : ''}</span>
+          <span class="nums">${x.dates.size}回・${x.sets}セット${detail ? `<br><small>${detail}</small>` : ''}</span></li>`;
+      }).join('')}</ul>` : '<p class="muted">この期間の記録はありません</p>'}
+    </section>
+
+    <section class="box sum-box">
+      <h3>有酸素</h3>
+      <p class="cardio-sum">${S.cardio.n
+        ? `${S.cardio.n}回${S.cardio.min ? `・${fmtNum(S.cardio.min)}分` : ''}${S.cardio.km ? `・${fmtNum(S.cardio.km)}km` : ''}`
+        : '<span class="muted">この期間の記録はありません</span>'}</p>
+    </section>
+
+    <section class="box sum-box">
+      <h3>推移（${mode === 'week' ? '直近8週' : '直近6か月'}）</h3>
+      <div class="seg small" id="metricSeg" role="group" aria-label="グラフの項目">
+        ${Object.entries(METRICS).map(([k, m]) => `<button type="button" data-metric="${k}" class="${stats.metric === k ? 'on' : ''}">${m.label}</button>`).join('')}
+      </div>
+      <p class="trend-cap" id="trendCap" aria-live="polite"></p>
+      <div class="trend" id="trend" role="list"></div>
+    </section>`;
+
+  const drawTrend = () => {
+    const m = stats.metric;
+    const max = Math.max(1, ...trend.map(x => x.v[m]));
+    const pick = stats.pick ?? n - 1;
+    $('#trend').innerHTML = trend.map((x, i) => `
+      <button type="button" class="tb ${i === n - 1 ? 'cur' : ''} ${i === pick ? 'pick' : ''}" data-i="${i}" role="listitem"
+        aria-label="${periodLabel(mode, x.p)}：${METRICS[m].unit(x.v[m])}">
+        <span class="bar-area"><i style="height:${x.v[m] ? Math.max(2, x.v[m] / max * 100) : 0}%"></i></span>
+        <span class="tl">${shortLabel(mode, trend[i].p)}</span>
+      </button>`).join('');
+    const x = trend[pick];
+    $('#trendCap').innerHTML = `<span class="muted">${periodLabel(mode, x.p)}</span>　<b>${METRICS[m].unit(x.v[m])}</b>`;
+  };
+  drawTrend();
+
+  $('#modeSeg').addEventListener('click', ev => {
+    const b = ev.target.closest('[data-mode]');
+    if (!b || b.dataset.mode === stats.mode) return;
+    stats.mode = b.dataset.mode;
+    stats.pick = null;
+    renderStats();
+  });
+  $('#prevP').addEventListener('click', () => { stats.anchor = shiftPeriod(mode, stats.anchor, -1); stats.pick = null; renderStats(); });
+  $('#nextP').addEventListener('click', () => { if (isNextFuture) return; stats.anchor = shiftPeriod(mode, stats.anchor, 1); stats.pick = null; renderStats(); });
+  $('#metricSeg').addEventListener('click', ev => {
+    const b = ev.target.closest('[data-metric]');
+    if (!b) return;
+    stats.metric = b.dataset.metric;
+    $$('#metricSeg button').forEach(x => x.classList.toggle('on', x === b));
+    drawTrend();
+  });
+  // 棒をタップすると、その期間の値を上に表示
+  $('#trend').addEventListener('click', ev => {
+    const b = ev.target.closest('.tb');
+    if (!b) return;
+    stats.pick = Number(b.dataset.i);
+    drawTrend();
+  });
+}
+
 /* ---------- 設定 ---------- */
 async function exportData() {
   const [exercises, entries, days] = await Promise.all([DB.all('exercises'), DB.all('entries'), DB.all('days')]);
@@ -570,6 +763,7 @@ async function route() {
     if (!page) return await renderCalendar();
     if (page === 'day') return await renderDay(decodeURIComponent(arg || 'today'));
     if (page === 'settings') return await renderSettings();
+    if (page === 'stats') return await renderStats();
     location.replace('#/');
   } catch (err) {
     console.error(err);
