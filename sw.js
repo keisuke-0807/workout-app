@@ -1,7 +1,7 @@
 // オフライン対応用 Service Worker
 // ★ 更新を公開するときは、この APP_VERSION を1つ上げる（バージョン番号はここだけで管理）。
 //   sw.js 自体の中身が変わるので、iPhone（Safari）でも確実に新しいバージョンとして検知される。
-const APP_VERSION = 5;
+const APP_VERSION = 6;
 const PREFIX = 'workout-log-v';
 const CACHE = `${PREFIX}${APP_VERSION}`;
 const ASSETS = [
