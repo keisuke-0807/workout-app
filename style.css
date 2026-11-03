@@ -225,6 +225,8 @@ main {
 .box { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; }
 .box h3 { margin: 0 0 6px; font-size: 16px; }
 .box p { margin: 6px 0; }
+.box .usage { font-weight: 700; margin-bottom: 0; }
+.box .usage + .small { margin-top: 0; }
 details { border-top: 1px solid var(--line); }
 details:first-child { margin-top: 12px; }
 summary { display: flex; align-items: center; gap: 8px; padding: 10px 2px; cursor: pointer; font-weight: 600; list-style: none; }

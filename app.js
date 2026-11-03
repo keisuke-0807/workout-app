@@ -35,6 +35,9 @@ const num = v => {
   const n = parseFloat(s);
   return Number.isFinite(n) ? n : '';
 };
+// データの大きさ（UTF-8でのバイト数）と表示用の単位
+const jsonBytes = v => (Array.isArray(v) && !v.length ? 0 : new Blob([JSON.stringify(v)]).size);
+const fmtSize = b => (b === 0 ? "0KB" : b < 1024 * 1024 ? `${(b / 1024).toFixed(b < 10 * 1024 ? 1 : 0)}KB` : `${(b / 1024 / 1024).toFixed(1)}MB`);
 const byOrder = (a, b) => (a.order ?? 0) - (b.order ?? 0);
 
 function setHeader(title, actions = '') {
@@ -422,9 +425,12 @@ async function importData(file) {
 async function renderSettings() {
   setTab('settings');
   setHeader('設定');
-  const [exercises, entries] = await Promise.all([DB.all('exercises'), DB.all('entries')]);
+  const [exercises, entries, days] = await Promise.all([DB.all('exercises'), DB.all('entries'), DB.all('days')]);
   exercises.sort(byOrder);
   const dates = new Set(entries.map(e => e.date));
+  // 使用容量：保存しているデータ（JSON換算）の大きさを合計する
+  const totalBytes = jsonBytes(exercises) + jsonBytes(entries) + jsonBytes(days);
+  const memoDays = days.filter(d => String(d.memo ?? '').trim()).length;
   view.innerHTML = `
     <section class="settings">
       <div class="box">
@@ -448,7 +454,9 @@ async function renderSettings() {
       </div>
       <div class="box">
         <h3>バックアップ</h3>
-        <p class="muted">記録した日数：${dates.size}日 / 記録した種目数：${entries.length}件</p>
+        <p class="usage">使用容量：約 ${fmtSize(totalBytes)}</p>
+        <p class="muted small">（記録 ${entries.length}件 ／ メモ ${memoDays}日分 ／ 種目 ${exercises.length}件）</p>
+        <p class="muted">記録した日数：${dates.size}日</p>
         <p class="muted">記録はこの端末の中だけに保存されています。ときどき書き出して、「ファイル」アプリ（iCloud Drive など）に保存しておくと安心です。</p>
         <button class="btn primary wide" id="export">バックアップを書き出す</button>
         <button class="btn secondary wide" id="importBtn">バックアップから読み込む</button>
