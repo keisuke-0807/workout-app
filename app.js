@@ -15,6 +15,7 @@ const PARTS = [
 ];
 const PART = Object.fromEntries(PARTS.map(p => [p.id, p]));
 const partOf = id => PART[id] || { id, name: '?', color: '#999' };
+const CACHE_PREFIX = 'workout-log-v'; // sw.js と同じ
 const KINDS = { weight: '重さ×回数', reps: '回数のみ', time: '時間（秒）', cardio: '時間・距離' };
 const WD = '日月火水木金土';
 
@@ -308,9 +309,11 @@ async function renderDay(date) {
 
   $('#addEx').addEventListener('click', () => openPicker(date, async ex => {
     const prev = await prevOf(ex.id, date);
+    // 形式を変えた種目では前回の値を入れない（入れる欄が違うため）
+    const usePrev = prev && prev.kind === ex.kind;
     const e = {
       id: uid(), date, exerciseId: ex.id, part: ex.part, name: ex.name, kind: ex.kind,
-      sets: prev ? prev.sets.filter(isFilled).map(s => ({ ...s })) : [blankSet(ex.kind)],
+      sets: usePrev ? prev.sets.filter(isFilled).map(s => ({ ...s })) : [blankSet(ex.kind)],
       order: Date.now(),
     };
     if (!e.sets.length) e.sets = [blankSet(ex.kind)];
@@ -422,9 +425,18 @@ async function importData(file) {
   return n;
 }
 
+// バージョンは sw.js が作るキャッシュの名前（workout-log-v<番号>）から読み取る
+async function appVersion() {
+  try {
+    const nums = (await caches.keys()).filter(k => k.startsWith(CACHE_PREFIX)).map(k => Number(k.slice(CACHE_PREFIX.length))).filter(Number.isFinite);
+    return nums.length ? String(Math.max(...nums)) : '-';
+  } catch { return '-'; }
+}
+
 async function renderSettings() {
   setTab('settings');
   setHeader('設定');
+  const ver = await appVersion();
   const [exercises, entries, days] = await Promise.all([DB.all('exercises'), DB.all('entries'), DB.all('days')]);
   exercises.sort(byOrder);
   const dates = new Set(entries.map(e => e.date));
@@ -448,6 +460,7 @@ async function renderSettings() {
             <ul class="ex-manage">${list.map(x => `
               <li data-id="${esc(x.id)}"><span class="nm">${esc(x.name)}<small class="muted">${KINDS[x.kind] || ''}</small></span>
                 <button type="button" class="text-btn rename">名前変更</button>
+                <button type="button" class="text-btn kind-btn">形式変更</button>
                 <button type="button" class="text-btn danger remove">削除</button></li>`).join('') || '<li class="muted small">なし</li>'}</ul>
           </details>`;
         }).join('')}</div>
@@ -464,7 +477,7 @@ async function renderSettings() {
       </div>
       <div class="box">
         <h3>アプリについて</h3>
-        <p class="muted">バージョン ${esc(self.APP_VERSION)}</p>
+        <p class="muted">バージョン ${esc(ver)}</p>
         <button class="btn secondary wide" id="checkUpdate">更新を確認</button>
       </div>
     </section>`;
@@ -479,9 +492,24 @@ async function renderSettings() {
     if (exercises.some(x => x.part === f.part.value && x.name === name)) { toast('同じ名前の種目がすでにあります'); return; }
     await DB.put('exercises', { id: uid(), part: f.part.value, name, kind: f.kind.value, order: Date.now() });
     toast(`「${name}」を追加しました`);
-    const open = f.part.value;
+    await rerender([f.part.value]);
+  });
+  // 一覧を最新の状態で描き直す（開いている部位とスクロール位置は保つ）
+  const rerender = async (alsoOpen = []) => {
+    const open = new Set([...$$('#exGroups details')].map((d, i) => (d.open ? PARTS[i].id : null)).filter(Boolean).concat(alsoOpen));
+    const y = window.scrollY;
     await renderSettings();
-    $$('#exGroups details')[PARTS.findIndex(p => p.id === open)].open = true;
+    $$('#exGroups details').forEach((d, i) => { d.open = open.has(PARTS[i].id); });
+    window.scrollTo(0, y);
+  };
+  $('#exGroups').addEventListener('change', async ev => {
+    const sel = ev.target.closest('.kind-sel');
+    if (!sel) return;
+    const ex = exercises.find(x => x.id === sel.closest('li').dataset.id);
+    ex.kind = sel.value;
+    await DB.put('exercises', ex);
+    toast(`「${ex.name}」を「${KINDS[ex.kind]}」に変更しました`);
+    await rerender();
   });
   $('#exGroups').addEventListener('click', async ev => {
     const li = ev.target.closest('li[data-id]');
@@ -497,11 +525,17 @@ async function renderSettings() {
       await Promise.all(related.map(e => DB.put('entries', { ...e, name })));
       $('.nm', li).firstChild.textContent = name;
       toast('名前を変更しました');
+    } else if (ev.target.closest('.kind-btn')) {
+      // 形式の選択欄を表示（選んだ時点で保存）
+      if ($('.kind-sel', li)) return;
+      li.insertAdjacentHTML('beforeend', `<select class="kind-sel" aria-label="記録の形式">${Object.entries(KINDS).map(([k, v]) =>
+        `<option value="${k}" ${k === ex.kind ? 'selected' : ''}>${v}</option>`).join('')}</select>`);
+      $('.kind-sel', li).focus();
     } else if (ev.target.closest('.remove')) {
       if (!confirm(`「${ex.name}」を種目の一覧から削除しますか？\n（これまでの記録は残ります）`)) return;
       await DB.del('exercises', ex.id);
-      li.remove();
       toast('削除しました');
+      await rerender(); // 一覧を読み直すので、同じ名前で登録し直せる
     }
   });
 

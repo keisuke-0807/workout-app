@@ -1,11 +1,11 @@
 // オフライン対応用 Service Worker
-// バージョンごとにファイル一式をキャッシュし、そのキャッシュから表示する。
-// version.js の番号が変わると新しい Service Worker として入れ替わり、ページに更新を知らせる。
-importScripts('version.js');
+// ★ 更新を公開するときは、この APP_VERSION を1つ上げる（バージョン番号はここだけで管理）。
+//   sw.js 自体の中身が変わるので、iPhone（Safari）でも確実に新しいバージョンとして検知される。
+const APP_VERSION = 3;
 const PREFIX = 'workout-log-v';
-const CACHE = `${PREFIX}${self.APP_VERSION}`;
+const CACHE = `${PREFIX}${APP_VERSION}`;
 const ASSETS = [
-  './', './index.html', './style.css', './version.js', './db.js', './app.js', './manifest.webmanifest',
+  './', './index.html', './style.css', './db.js', './app.js', './manifest.webmanifest',
   './icons/icon-180.png', './icons/icon-192.png', './icons/icon-512.png',
 ];
 

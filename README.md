@@ -20,8 +20,7 @@ iPhoneのホーム画面に追加して使います。データはすべて端�
 | app.js | 画面表示と操作 |
 | db.js | データ保存（IndexedDB）と初期の種目一覧 |
 | style.css | デザイン |
-| version.js | バージョン番号（sw.js と共用） |
-| sw.js | オフライン対応（Service Worker） |
+| sw.js | オフライン対応（Service Worker）とバージョン番号 |
 | manifest.webmanifest / icons/ | ホーム画面用の設定とアイコン |
 
 ## PCで動かす
@@ -32,7 +31,7 @@ python -m http.server 8000
 http://localhost:8000 を開きます。
 
 ## 更新するとき
-ファイルを変更したら `version.js` の `APP_VERSION` を1つ上げてから公開します。
+ファイルを変更したら `sw.js` の `APP_VERSION` を1つ上げてから公開します（バージョン番号はここだけで管理します）。
 アプリを開いたとき（またはバックグラウンドから戻ったとき）に「新しいバージョンがあります［更新］」と表示されます。
 
 ## 注意
